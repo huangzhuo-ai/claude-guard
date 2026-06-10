@@ -35,6 +35,7 @@ def _now() -> str:
 class SessionRegistry:
     def __init__(self, db_path):
         self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.bak_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
         self._lock = threading.Lock()
         self._conn = self._open_or_recover()
@@ -90,6 +91,16 @@ class SessionRegistry:
                 "UPDATE sessions SET status = ?, updated_at = ? "
                 "WHERE session_id = ?",
                 (status, _now(), session_id),
+            )
+            self._conn.commit()
+
+    def update_work_dir(self, session_id, work_dir):
+        """更新工作目录（导入迁移处理路径差异时用）。"""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE sessions SET work_dir = ?, updated_at = ? "
+                "WHERE session_id = ?",
+                (str(work_dir), _now(), session_id),
             )
             self._conn.commit()
 

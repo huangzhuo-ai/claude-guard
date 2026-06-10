@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from claude_guard.session_registry import SessionRegistry
 from claude_guard.supervisor import Supervisor
+from claude_guard import snapshotter
 from gui.workers import SessionWorker
 
 _AUTORUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -138,8 +139,8 @@ class MainWindow(QMainWindow):
         btn_new.clicked.connect(self._on_new)
         btn_resume.clicked.connect(self._on_resume)
         btn_stop.clicked.connect(self._on_stop)
-        btn_export.clicked.connect(self._on_export_stub)
-        btn_import.clicked.connect(self._on_import_stub)
+        btn_export.clicked.connect(self._on_export)
+        btn_import.clicked.connect(self._on_import)
 
         # 分割布局
         splitter = QSplitter(Qt.Horizontal)
@@ -325,13 +326,56 @@ class MainWindow(QMainWindow):
                 pass
             self.statusBar().showMessage("已取消开机自启", 3000)
 
-    # ── 导出 / 导入（阶段三 Snapshotter 占位） ──────────────────────────────
+    # ── 导出 / 导入（Snapshotter） ──────────────────────────────────────────
 
-    def _on_export_stub(self):
-        QMessageBox.information(self, "导出", "导出功能将在阶段三（Snapshotter）实现。")
+    def _on_export(self):
+        rows = self.registry.list_resumable()
+        if not rows:
+            QMessageBox.information(self, "导出", "没有可导出的会话。")
+            return
+        sid = self._selected_sid()
+        ids = [sid] if sid else [r["session_id"] for r in rows]
+        out, _ = QFileDialog.getSaveFileName(
+            self, "导出会话快照", "claude-guard-snapshot.zip",
+            "Zip 文件 (*.zip)")
+        if not out:
+            return
+        try:
+            snapshotter.export_snapshot(self.registry, ids, out)
+            QMessageBox.information(
+                self, "导出成功",
+                f"已导出 {len(ids)} 个会话到：\n{out}")
+        except FileNotFoundError as e:
+            QMessageBox.warning(self, "导出失败", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"{type(e).__name__}: {e}")
 
-    def _on_import_stub(self):
-        QMessageBox.information(self, "导入", "导入功能将在阶段三（Snapshotter）实现。")
+    def _on_import(self):
+        zip_path, _ = QFileDialog.getOpenFileName(
+            self, "选择会话快照", "", "Zip 文件 (*.zip)")
+        if not zip_path:
+            return
+
+        def resolver(session_id, old_path):
+            # 路径差异：原工作目录在本机不存在，弹窗让用户重新指定
+            QMessageBox.information(
+                self, "路径差异",
+                f"会话 {session_id} 的原工作目录在本机不存在：\n{old_path}\n\n"
+                "请重新指定该项目在本机的目录。")
+            new_dir = QFileDialog.getExistingDirectory(
+                self, f"为会话 {session_id} 选择工作目录")
+            return new_dir or None
+
+        try:
+            result = snapshotter.import_snapshot(
+                zip_path, self.registry, resolve_path=resolver)
+            self._refresh_list()
+            msg = f"已导入 {len(result['imported'])} 个会话。"
+            if result["skipped"]:
+                msg += f"\n跳过 {len(result['skipped'])} 个（未指定目录）。"
+            QMessageBox.information(self, "导入完成", msg)
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", f"{type(e).__name__}: {e}")
 
     # ── 关闭 ─────────────────────────────────────────────────────────────────
 
