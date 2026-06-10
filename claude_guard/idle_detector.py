@@ -32,10 +32,17 @@ DEFAULT_PERMISSION_PATTERNS = [
     r"Do you want to proceed",
     r"Do you want to continue",
     r"Allow .*\?",
+    # claude 的箭头菜单式确认（含首次 bypass 同意协议）：
+    # 形如 "1.No,exit 2.Yes,I accept  Enter to confirm"
+    r"Enter to confirm",
+    r"❯\s*1\.",
 ]
 
-# 「等待输入」提示符识别：行尾是 ">"（可带空格）即视为回到等待输入
-DEFAULT_PROMPT_PATTERN = r">\s*$"
+# 「等待输入」提示符识别：
+# - fake_claude 等行式程序用 ">" 结尾
+# - 真实 claude(2.x) 的 TUI 用 "❯"(U+276F) 作为输入提示符
+# 末尾出现其一即视为回到等待输入。
+DEFAULT_PROMPT_PATTERN = r"(?:>|❯)\s*$"
 
 
 class IdleDetector:
