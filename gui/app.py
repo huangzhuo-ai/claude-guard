@@ -297,7 +297,9 @@ class MainWindow(QMainWindow):
 
     def _toggle_autorun(self, state):
         exe = sys.executable  # 打包后应替换为 exe 路径
-        if state == Qt.Checked:
+        # 注意：stateChanged 传来的 state 是 int，与 Qt.Checked 枚举直接比较
+        # 在 PySide6 下不可靠；直接读复选框的实际勾选状态。
+        if self._autorun_cb.isChecked():
             try:
                 key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                                      _AUTORUN_KEY, 0, winreg.KEY_SET_VALUE)
