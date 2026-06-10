@@ -62,14 +62,23 @@ class IdleDetector:
         self._prompt_re = re.compile(prompt_pattern)
         self._tail = ""
         self._last_feed = None
+        self._last_clean_sig = ""   # 上次 feed 后可见内容的签名，用于去重重绘
 
     def feed(self, text):
-        """喂入新输出块。重置静止计时，累积到尾部快照。"""
+        """喂入新输出块。
+
+        只在剥离 ANSI 后的可见内容真正变化时，才重置静止计时器。
+        TUI 反复重绘相同画面（光标移位、颜色刷新）不算「有新活动」。
+        """
         if not text:
             return
         clean = _strip_ansi(text)
+        # 用折叠空白后的内容作签名，忽略空白符差异（TUI 可能插入空格填充）
+        sig = " ".join(clean.split())
         self._tail = (self._tail + clean)[-4096:]
-        self._last_feed = time.monotonic()
+        if sig != self._last_clean_sig:
+            self._last_clean_sig = sig
+            self._last_feed = time.monotonic()
 
     def reset(self):
         """一轮开始时重置：清空尾部，回到初始 busy。"""
