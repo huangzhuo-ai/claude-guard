@@ -20,6 +20,8 @@ def main():
         cmd = line.strip()
         if cmd == "exit":
             sys.exit(0)
+        if cmd == "crash":
+            sys.exit(3)
         if cmd == "perm":
             sys.stdout.write("Do you want to proceed? (y/n)")
             sys.stdout.flush()

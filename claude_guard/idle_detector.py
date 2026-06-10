@@ -11,6 +11,19 @@
 import re
 import time
 
+# 剥离 ANSI/VT 转义序列：PTY 输出里夹杂大量光标/标题/颜色控制码，
+# 它们会干扰提示符与权限询问的匹配，匹配前需先清理。
+# 覆盖：CSI 序列(\x1b[...)、OSC 序列(\x1b]...\x07 或 \x1b\\)、双字符转义。
+_ANSI_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"      # CSI: ESC [ ... final
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC: ESC ] ... BEL/ST
+    r"|\x1b[@-Z\\-_]"                  # 双字符转义
+)
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
 # 默认权限询问识别模式（保守、内置几条；生产可由配置覆盖）
 DEFAULT_PERMISSION_PATTERNS = [
     r"\(y/n\)",
@@ -47,7 +60,8 @@ class IdleDetector:
         """喂入新输出块。重置静止计时，累积到尾部快照。"""
         if not text:
             return
-        self._tail = (self._tail + text)[-4096:]
+        clean = _strip_ansi(text)
+        self._tail = (self._tail + clean)[-4096:]
         self._last_feed = time.monotonic()
 
     def reset(self):
