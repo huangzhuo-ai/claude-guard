@@ -15,6 +15,7 @@ from pathlib import Path
 
 from claude_guard.session_registry import SessionRegistry
 from claude_guard.supervisor import Supervisor
+from claude_guard.config import GuardConfig
 
 DEFAULT_DB = Path.home() / ".claude-guard" / "registry.db"
 
@@ -34,7 +35,7 @@ def cmd_new(args):
         permission_mode=args.permission,
         max_rounds=args.max_rounds,
     )
-    sup = Supervisor(reg, idle_seconds=args.idle_seconds)
+    sup = Supervisor(reg, config=GuardConfig(idle_settle_seconds=args.idle_seconds))
     launch = ["claude", "--resume", args.session_id] if args.resume_existing \
         else ["claude"]
     print(f"启动会话 {args.session_id}（目录 {args.dir}，权限 {args.permission}）")
@@ -48,7 +49,7 @@ def cmd_resume(args):
     if row is None:
         print(f"会话 {args.session_id} 不在账本中", file=sys.stderr)
         return 1
-    sup = Supervisor(reg, idle_seconds=args.idle_seconds)
+    sup = Supervisor(reg, config=GuardConfig(idle_settle_seconds=args.idle_seconds))
     launch = ["claude", "--resume", args.session_id]
     print(f"恢复会话 {args.session_id}")
     sup.start_session(args.session_id, launch_cmd=launch)

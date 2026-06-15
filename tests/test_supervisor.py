@@ -16,9 +16,15 @@ import pytest
 
 from claude_guard.session_registry import SessionRegistry
 from claude_guard.supervisor import Supervisor
+from claude_guard.config import GuardConfig
 
 FAKE = str(Path(__file__).parent / "fake_claude.py")
 LAUNCH = [sys.executable, FAKE]
+
+
+def _fast_cfg():
+    # 测试用小阈值：转闲 0.3s 算 idle，超 0.3*8=2.4s 才 stuck
+    return GuardConfig(idle_settle_seconds=0.3, idle_timeout_multiplier=8.0)
 
 
 @pytest.fixture
@@ -34,7 +40,7 @@ def test_runs_until_max_rounds(registry):
     用 ASCII 指令 "go" 保证 PTY 写入确定性（中文默认指令留给真 Claude 冒烟测试）。
     """
     registry.add("s1", ".", "做点事", "skip", max_rounds=3)
-    sup = Supervisor(registry, idle_seconds=0.3)
+    sup = Supervisor(registry, config=_fast_cfg())
     sup.start_session("s1", launch_cmd=LAUNCH, instruction="go")
     sup.wait_session("s1", timeout=30)
     row = registry.get("s1")
@@ -45,7 +51,7 @@ def test_runs_until_max_rounds(registry):
 def test_stuck_at_max_rounds_two(registry):
     """max_rounds=2 时第 2 轮后状态变 stuck。"""
     registry.add("s2", ".", "目标", "skip", max_rounds=2)
-    sup = Supervisor(registry, idle_seconds=0.3)
+    sup = Supervisor(registry, config=_fast_cfg())
     sup.start_session("s2", launch_cmd=LAUNCH, instruction="go")
     sup.wait_session("s2", timeout=30)
     row = registry.get("s2")
@@ -56,7 +62,7 @@ def test_stuck_at_max_rounds_two(registry):
 def test_stop_session_kills_process(registry):
     """stop_session() 后进程不再存在。"""
     registry.add("s3", ".", "目标", "skip", max_rounds=100)
-    sup = Supervisor(registry, idle_seconds=0.3)
+    sup = Supervisor(registry, config=_fast_cfg())
     sup.start_session("s3", launch_cmd=LAUNCH)
     time.sleep(1.0)  # 让它先跑一会
     sup.stop_session("s3")
@@ -66,7 +72,7 @@ def test_stop_session_kills_process(registry):
 def test_notify_mode_pauses_on_permission(registry):
     """notify 模式遇到权限询问 -> 暂停（paused），不自动按键。"""
     registry.add("s4", ".", "目标", "notify", max_rounds=100)
-    sup = Supervisor(registry, idle_seconds=0.3)
+    sup = Supervisor(registry, config=_fast_cfg())
     sup.start_session("s4", launch_cmd=LAUNCH, instruction="perm")
     sup.wait_session("s4", timeout=30)
     assert registry.get("s4")["status"] == "paused"
@@ -75,8 +81,8 @@ def test_notify_mode_pauses_on_permission(registry):
 def test_skip_mode_auto_answers_permission(registry):
     """skip 模式遇到权限询问 -> 自动应答继续，能正常推进轮次。"""
     registry.add("s5", ".", "目标", "skip", max_rounds=2)
-    sup = Supervisor(registry, idle_seconds=0.3)
-    # 先发一个权限询问，skip 自动应答 y 后 fake 回到 ready，继续后续轮次
+    sup = Supervisor(registry, config=_fast_cfg())
+    # 先发一个权限询问，skip 自动应答 Enter 后 fake 回到 ready，继续后续轮次
     sup.start_session("s5", launch_cmd=LAUNCH, instruction="perm")
     sup.wait_session("s5", timeout=30)
     row = registry.get("s5")
@@ -87,7 +93,7 @@ def test_skip_mode_auto_answers_permission(registry):
 def test_crash_marks_crashed(registry):
     """子进程异常退出（非零退出码）-> 状态 crashed，不自动重启。"""
     registry.add("s6", ".", "目标", "skip", max_rounds=100)
-    sup = Supervisor(registry, idle_seconds=0.3)
+    sup = Supervisor(registry, config=_fast_cfg())
     sup.start_session("s6", launch_cmd=LAUNCH, instruction="crash")
     sup.wait_session("s6", timeout=30)
     assert registry.get("s6")["status"] == "crashed"
