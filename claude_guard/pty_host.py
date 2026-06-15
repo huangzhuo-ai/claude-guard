@@ -14,7 +14,7 @@ class PtyHost:
         self._reader = None
         self._buffer = []
         self._buf_lock = threading.Lock()
-        self._callback = None
+        self._callbacks = []  # 支持多个回调
         self._stopped = threading.Event()
 
     def start(self, cmd, cwd="."):
@@ -39,30 +39,53 @@ class PtyHost:
                 continue
             with self._buf_lock:
                 self._buffer.append(data)
-            if self._callback:
-                self._callback(data)
+            # 调用所有注册的回调
+            for callback in self._callbacks:
+                try:
+                    callback(data)
+                except Exception:
+                    pass  # 单个回调失败不影响其他
 
     def read_output(self, callback):
-        """注册逐块输出回调。每读到一块输出就调用 callback(text)。"""
-        self._callback = callback
+        """注册逐块输出回调。每读到一块输出就调用 callback(text)。
+
+        支持注册多个回调，按注册顺序依次调用。
+        """
+        self._callbacks.append(callback)
 
     def output_buffer(self) -> str:
         """返回迄今累积的全部输出。"""
         with self._buf_lock:
             return "".join(self._buffer)
 
-    def write(self, text):
+    def write(self, text) -> bool:
         """向进程写入原始文本（模拟键盘输入）。
 
         注意：在伪终端里，「回车」对应的字符是 \\r（回车符），不是 \\n。
         若调用方传入 \\n，自动归一化为 \\r，以匹配真实终端的按键行为。
+
+        进程已退出/PTY 已关闭时返回 False（不抛异常），避免写入竞争
+        把监管线程打挂。成功返回 True。
         """
         text = text.replace("\r\n", "\r").replace("\n", "\r")
-        self._pty.write(text)
+        return self._safe_write(text)
 
-    def send_line(self, text):
-        """发送一行指令并「按回车」。等价于 write(text + 回车)。"""
-        self._pty.write(text + "\r")
+    def send_line(self, text) -> bool:
+        """发送一行指令并「按回车」。等价于 write(text + 回车)。
+
+        进程已退出/PTY 已关闭时返回 False（不抛异常）。
+        """
+        return self._safe_write(text + "\r")
+
+    def _safe_write(self, raw: str) -> bool:
+        if self._pty is None or not self._pty.isalive():
+            return False
+        try:
+            self._pty.write(raw)
+            return True
+        except (EOFError, OSError):
+            # PTY 在检查与写入之间关闭了（竞争）；当作写入失败处理。
+            return False
 
     def is_alive(self) -> bool:
         return self._pty is not None and self._pty.isalive()
