@@ -1,18 +1,37 @@
-"""假 Claude 程序：用于确定性地测试 PtyHost，不依赖真 claude。
+"""假 claude：渲染带底部状态栏的 TUI 画面，确定性测试用，不依赖真 claude。
 
-行为：
-- 启动后打印 "Claude ready >"
-- 等待一行输入；收到后打印 "working..."，停 0.5 秒，再打印 "done. Claude ready >"
-- 收到 "perm" 时打印一条权限询问 "Do you want to proceed? (y/n)"
-- 收到 "exit" 时以退出码 0 结束
+用真实 ANSI 清屏/光标定位渲染，使 pyte 渲染与三态判定被走到。
+行式读 stdin，每收到一行根据内容切换画面。
+状态栏特征与 GuardConfig 默认值一致：
+  idle  -> "? for shortcuts"
+  busy  -> "esc to interrupt"
+  asking-> "Enter to confirm"
 """
 import sys
 import time
 
+CLEAR = "\x1b[2J\x1b[H"
+
+
+def _draw(body: str, footer: str):
+    sys.stdout.write(CLEAR + body + "\r\n" + footer)
+    sys.stdout.flush()
+
+
+def _idle():
+    _draw("Claude ready.", "? for shortcuts \xb7 \xe2\x86\x90 for agents")
+
+
+def _busy():
+    _draw("✻ Considering…", "esc to interrupt")
+
+
+def _asking():
+    _draw("❯ 1. Yes\r\n  2. No", "Enter to confirm \xb7 Esc to cancel")
+
 
 def main():
-    sys.stdout.write("Claude ready >")
-    sys.stdout.flush()
+    _idle()
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -23,14 +42,12 @@ def main():
         if cmd == "crash":
             sys.exit(3)
         if cmd == "perm":
-            sys.stdout.write("Do you want to proceed? (y/n)")
-            sys.stdout.flush()
+            _asking()
             continue
-        sys.stdout.write("working...")
-        sys.stdout.flush()
-        time.sleep(0.5)
-        sys.stdout.write("done. Claude ready >")
-        sys.stdout.flush()
+        # 普通指令：忙一下再回到 idle
+        _busy()
+        time.sleep(0.3)
+        _idle()
 
 
 if __name__ == "__main__":
