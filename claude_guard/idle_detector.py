@@ -1,102 +1,50 @@
-"""IdleDetector：消费输出流，判断会话当前处于何种状态。
+"""IdleDetector：在 ScreenModel 的客观三态上叠加时间维度。
 
-状态语义（优先级：permission_prompt > idle > busy）：
-- permission_prompt: 输出匹配权限询问模式，需要按 permission_mode 处理
-- idle: 距上次输出超过阈值秒数，且输出末尾匹配「等待输入」提示符
-- busy: 其他情况（刚有输出、或还在忙、或输出停在中途）
+ScreenModel 负责「画面 + 此刻是 busy/idle/asking」（无时间概念）；
+本类负责「转闲后静止够久才算真 idle」「卡太久兜底标 stuck」。
 
-不依赖真进程：调用方把 PtyHost 读到的每块输出 feed() 进来即可。
-权限询问模式做成可配置/可更新（来自配置文件），不写死。
+state 取值：busy / idle / asking / stuck。
+- asking 立即透传（claude 停下问用户，不该等）
+- busy 记录最后忙时刻
+- idle 未满 settle 秒 -> 仍 busy（观察期，防输出中途误判）
+- idle 满 settle 秒 -> idle
+- idle 持续超 settle*multiplier 秒 -> stuck（兜底，防文案变化卡死）
 """
-import re
 import time
 
-# 剥离 ANSI/VT 转义序列：PTY 输出里夹杂大量光标/标题/颜色控制码，
-# 它们会干扰提示符与权限询问的匹配，匹配前需先清理。
-# 覆盖：CSI 序列(\x1b[...)、OSC 序列(\x1b]...\x07 或 \x1b\\)、双字符转义。
-_ANSI_RE = re.compile(
-    r"\x1b\[[0-9;?]*[ -/]*[@-~]"      # CSI: ESC [ ... final
-    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC: ESC ] ... BEL/ST
-    r"|\x1b[@-Z\\-_]"                  # 双字符转义
-)
-
-
-def _strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub("", text)
-
-# 默认权限询问识别模式（保守、内置几条；生产可由配置覆盖）
-DEFAULT_PERMISSION_PATTERNS = [
-    r"\(y/n\)",
-    r"\(y/N\)",
-    r"\[y/n\]",
-    r"Do you want to proceed",
-    r"Do you want to continue",
-    r"Allow .*\?",
-    # claude 的箭头菜单式确认（含首次 bypass 同意协议）：
-    # 形如 "1.No,exit 2.Yes,I accept  Enter to confirm"
-    r"Enter to confirm",
-    r"❯\s*1\.",
-]
-
-# 「等待输入」提示符识别：
-# - fake_claude 等行式程序用 ">" 结尾
-# - 真实 claude(2.x) 的 TUI 用 "❯"(U+276F) 作为输入提示符
-# 末尾出现其一即视为回到等待输入。
-DEFAULT_PROMPT_PATTERN = r"(?:>|❯)\s*$"
+from claude_guard.screen_model import ScreenModel
 
 
 class IdleDetector:
-    def __init__(
-        self,
-        idle_seconds=60.0,
-        permission_patterns=None,
-        prompt_pattern=DEFAULT_PROMPT_PATTERN,
-    ):
-        self.idle_seconds = idle_seconds
-        patterns = (
-            permission_patterns
-            if permission_patterns is not None
-            else DEFAULT_PERMISSION_PATTERNS
-        )
-        self._perm_res = [re.compile(p) for p in patterns]
-        self._prompt_re = re.compile(prompt_pattern)
-        self._tail = ""
-        self._last_feed = None
-        self._last_clean_sig = ""   # 上次 feed 后可见内容的签名，用于去重重绘
+    def __init__(self, config):
+        self._cfg = config
+        self._screen = ScreenModel(config)
+        self.reset()
 
     def feed(self, text):
-        """喂入新输出块。
+        self._screen.feed(text)
 
-        只在剥离 ANSI 后的可见内容真正变化时，才重置静止计时器。
-        TUI 反复重绘相同画面（光标移位、颜色刷新）不算「有新活动」。
-        """
-        if not text:
-            return
-        clean = _strip_ansi(text)
-        # 用折叠空白后的内容作签名，忽略空白符差异（TUI 可能插入空格填充）
-        sig = " ".join(clean.split())
-        self._tail = (self._tail + clean)[-4096:]
-        if sig != self._last_clean_sig:
-            self._last_clean_sig = sig
-            self._last_feed = time.monotonic()
+    def render(self) -> str:
+        return self._screen.render()
 
     def reset(self):
-        """一轮开始时重置：清空尾部，回到初始 busy。"""
-        self._tail = ""
-        self._last_feed = None
+        """一轮开始时重置计时，回到初始 busy。"""
+        self._last_busy = time.monotonic()
 
     @property
-    def state(self):
-        # 还没有任何输出 -> busy
-        if self._last_feed is None:
+    def state(self) -> str:
+        cls = self._screen.classify()
+        now = time.monotonic()
+        if cls == "asking":
+            return "asking"
+        if cls == "busy":
+            self._last_busy = now
             return "busy"
-        # 权限询问优先级最高
-        if any(r.search(self._tail) for r in self._perm_res):
-            return "permission_prompt"
-        # 未达静止阈值 -> busy
-        if time.monotonic() - self._last_feed < self.idle_seconds:
+        # cls == "idle"
+        quiet = now - self._last_busy
+        settle = self._cfg.idle_settle_seconds
+        if quiet < settle:
             return "busy"
-        # 超时但末尾不是提示符（输出停在中途）-> busy，避免误判
-        if not self._prompt_re.search(self._tail):
-            return "busy"
+        if quiet >= settle * self._cfg.idle_timeout_multiplier:
+            return "stuck"
         return "idle"
