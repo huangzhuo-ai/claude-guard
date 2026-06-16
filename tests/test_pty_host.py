@@ -29,20 +29,19 @@ def host():
 
 def test_start_shows_ready(host):
     host.start([sys.executable, FAKE], cwd=".")
-    assert _wait_for(host, "Claude ready >")
+    assert _wait_for(host, "? for shortcuts")
 
 
 def test_write_triggers_working_and_done(host):
     host.start([sys.executable, FAKE], cwd=".")
-    assert _wait_for(host, "Claude ready >")
+    assert _wait_for(host, "? for shortcuts")
     host.write("hello\n")
-    assert _wait_for(host, "working...")
-    assert _wait_for(host, "done.")
+    assert _wait_for(host, "esc to interrupt")
 
 
 def test_is_alive_then_terminate(host):
     host.start([sys.executable, FAKE], cwd=".")
-    assert _wait_for(host, "Claude ready >")
+    assert _wait_for(host, "? for shortcuts")
     assert host.is_alive() is True
     host.terminate()
     time.sleep(0.3)
@@ -52,6 +51,6 @@ def test_is_alive_then_terminate(host):
 def test_exit_returns_zero():
     host = PtyHost()
     host.start([sys.executable, FAKE], cwd=".")
-    assert _wait_for(host, "Claude ready >")
+    assert _wait_for(host, "? for shortcuts")
     host.write("exit\n")
     assert host.wait(timeout=5) == 0

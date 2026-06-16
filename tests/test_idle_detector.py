@@ -1,74 +1,76 @@
-"""IdleDetector 测试：直接 feed 字符串，不依赖真进程。
+"""IdleDetector 测试：薄计时逻辑，包一个 ScreenModel。
 
-状态语义：
-- busy: 刚有输出、或还在忙（未达静止阈值）
-- idle: 距上次输出超过阈值秒数，且输出末尾匹配「等待输入」提示符
-- permission_prompt: 输出匹配权限询问模式
+用真实状态栏画面字节驱动；时间维度用小阈值快速验证。
 """
 import time
 
+from claude_guard.config import GuardConfig
 from claude_guard.idle_detector import IdleDetector
 
+CLEAR = "\x1b[2J\x1b[H"
+IDLE = CLEAR + "Done.\r\n? for shortcuts"
+BUSY = CLEAR + "✻ Considering…\r\nesc to interrupt"
+ASK = CLEAR + "❯ 1. Yes\r\nEnter to confirm"
 
-def test_busy_right_after_output():
-    """刚喂入输出、未超时 -> busy。"""
-    det = IdleDetector(idle_seconds=5.0)
-    det.feed("working...")
+
+def _det(settle=0.2, mult=5.0):
+    cfg = GuardConfig(idle_settle_seconds=settle, idle_timeout_multiplier=mult)
+    return IdleDetector(cfg)
+
+
+def test_busy_right_after_busy_frame():
+    det = _det()
+    det.feed(BUSY)
     assert det.state == "busy"
 
 
-def test_idle_after_threshold_with_prompt():
-    """超过阈值且末尾是提示符 -> idle。"""
-    det = IdleDetector(idle_seconds=0.2)
-    det.feed("Claude ready >")
-    time.sleep(0.3)
+def test_idle_only_after_settle():
+    det = _det(settle=0.3)
+    det.feed(BUSY)          # 先忙
+    det.feed(IDLE)          # 转闲
+    assert det.state == "busy"   # 还在观察期
+    time.sleep(0.4)
+    assert det.state == "idle"   # 静止够久
+
+
+def test_asking_is_immediate():
+    det = _det(settle=10.0)
+    det.feed(ASK)
+    assert det.state == "asking"   # 不等观察期
+
+
+def test_new_busy_resets_settle():
+    det = _det(settle=0.3)
+    det.feed(BUSY)
+    det.feed(IDLE)
+    time.sleep(0.4)
     assert det.state == "idle"
-
-
-def test_not_idle_before_threshold():
-    """末尾是提示符但未超时 -> busy。"""
-    det = IdleDetector(idle_seconds=5.0)
-    det.feed("Claude ready >")
+    det.feed(BUSY)               # 又忙起来
     assert det.state == "busy"
 
 
-def test_not_idle_if_no_prompt_at_end():
-    """超时但末尾不是提示符（仍在输出中途）-> busy，避免误判。"""
-    det = IdleDetector(idle_seconds=0.2)
-    det.feed("still computing the answer")
-    time.sleep(0.3)
-    assert det.state == "busy"
-
-
-def test_permission_prompt_detected():
-    """匹配权限询问模式 -> permission_prompt（优先级高于 idle/busy）。"""
-    det = IdleDetector(idle_seconds=5.0)
-    det.feed("Do you want to proceed? (y/n)")
-    assert det.state == "permission_prompt"
-
-
-def test_permission_prompt_custom_pattern():
-    """权限模式可配置/可更新。"""
-    det = IdleDetector(idle_seconds=5.0, permission_patterns=[r"Allow this\?"])
-    det.feed("Allow this?")
-    assert det.state == "permission_prompt"
-
-
-def test_reset_clears_state():
-    """reset() 后回到初始 busy，且重新计时。"""
-    det = IdleDetector(idle_seconds=0.2)
-    det.feed("Claude ready >")
+def test_reset_returns_to_busy():
+    det = _det(settle=0.2)
+    det.feed(BUSY)
+    det.feed(IDLE)
     time.sleep(0.3)
     assert det.state == "idle"
     det.reset()
     assert det.state == "busy"
 
 
-def test_feed_updates_idle_timer():
-    """idle 后再喂新输出 -> 回到 busy（计时重置）。"""
-    det = IdleDetector(idle_seconds=0.2)
-    det.feed("Claude ready >")
+def test_stuck_after_timeout():
+    # settle=0.2, mult=3 -> 0.6s 后仍 idle 则 stuck
+    det = _det(settle=0.2, mult=3.0)
+    det.feed(BUSY)
+    det.feed(IDLE)
     time.sleep(0.3)
     assert det.state == "idle"
-    det.feed("working...")
-    assert det.state == "busy"
+    time.sleep(0.5)              # 累计 >0.6s 仍 idle
+    assert det.state == "stuck"
+
+
+def test_render_passthrough():
+    det = _det()
+    det.feed(IDLE)
+    assert "Done." in det.render()
