@@ -11,7 +11,7 @@ from pathlib import Path
 
 from typing import Optional
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog,
@@ -109,10 +109,14 @@ class MainWindow(QMainWindow):
 
         _DB.parent.mkdir(parents=True, exist_ok=True)
         self.registry = SessionRegistry(_DB)
-        self.supervisor = Supervisor(self.registry, idle_seconds=60.0)
+        self.supervisor = Supervisor(self.registry)
         self._threads: dict[str, QThread] = {}
 
         self._build_ui()
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(200)  # ms
+        self._poll_timer.timeout.connect(self._refresh_output)
+        self._poll_timer.start()
         self._refresh_list()
 
     # ── UI 构建 ────────────────────────────────────────────────────────────
@@ -260,7 +264,6 @@ class MainWindow(QMainWindow):
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
-        worker.output.connect(self._on_output)
         worker.status_changed.connect(self._on_status_changed)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
@@ -270,10 +273,14 @@ class MainWindow(QMainWindow):
         self._threads[sid] = thread
         thread.start()
 
-    def _on_output(self, sid, text):
-        if self._selected_sid() == sid:
-            self.output_view.moveCursor(self.output_view.textCursor().End)
-            self.output_view.insertPlainText(text)
+    def _refresh_output(self):
+        sid = self._selected_sid()
+        if not sid:
+            return
+        snapshot = self.supervisor.render_session(sid)
+        # 整屏快照：仅在变化时刷新，避免光标/滚动抖动
+        if snapshot != self.output_view.toPlainText():
+            self.output_view.setPlainText(snapshot)
 
     def _on_status_changed(self, sid, status):
         self._refresh_list()
