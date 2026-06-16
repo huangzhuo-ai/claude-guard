@@ -112,8 +112,9 @@ class Supervisor:
         """
         mode = self._registry.get(session_id)["permission_mode"]
         if mode == "skip":
-            det.reset()
             host.send_line("")   # 纯回车
+            time.sleep(0.2)      # 让 asking 画面清掉
+            det.reset()          # 现在开始计时
             return True
         self._registry.update_status(session_id, "paused")
         host.terminate()
