@@ -75,3 +75,32 @@ def test_feed_bad_bytes_does_not_raise():
     sm.feed("\x1b[")          # 不完整转义序列
     sm.feed(_idle_frame())    # 后续正常喂入仍工作
     assert sm.classify() == "idle"
+
+
+def test_only_checks_footer_not_history():
+    """验证只检查最后3行，历史输出中的标记不会干扰。"""
+    sm = ScreenModel(CFG)
+    # 构造一个屏幕：顶部有历史idle标记，底部是busy状态
+    # 24行屏幕，前面塞满"? for shortcuts"，最后一行是busy标记
+    fake_history = "\r\n".join(["? for shortcuts"] * 20)
+    sm.feed(CLEAR + fake_history + "\r\n" + "esc to interrupt")
+    # 应该识别为busy（只看底部），而非idle（被历史干扰）
+    assert sm.classify() == "busy"
+
+
+def test_regex_marker_support():
+    """验证 'regex:...' 前缀启用正则匹配。"""
+    cfg = GuardConfig(
+        # 用正则：要求 "? for shortcuts" 在行尾
+        idle_markers=["regex:\\? for shortcuts$"],
+        busy_markers=["esc to interrupt"]
+    )
+    sm = ScreenModel(cfg)
+    # "? for shortcuts" 在行尾 -> 应该匹配
+    sm.feed(CLEAR + "Done.\r\n? for shortcuts")
+    assert sm.classify() == "idle"
+
+    # "? for shortcuts" 在行中 -> 不匹配（正则要求行尾）
+    sm2 = ScreenModel(cfg)
+    sm2.feed(CLEAR + "? for shortcuts is a feature\r\nesc to interrupt")
+    assert sm2.classify() == "busy"  # idle不匹配，busy匹配
